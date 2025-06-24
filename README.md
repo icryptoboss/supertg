@@ -30,7 +30,7 @@ https://youtu.be/PYDtSTM6w44?si=noKPl7o4iU9SR_TO
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
 
-[![Deploy to Koyeb](https://www.koyeb.com/static/images/deploy/button.svg)](https://app.koyeb.com/deploy?name=saini-txt-direct&repository=nikhilsainiop%2FSaini-txt-direct&branch=main&instance_type=free&instances_min=0)
+[![Deploy to Koyeb](https://www.koyeb.com/static/images/deploy/button.svg)](https://app.koyeb.com/deploy?name=supertg&repository=icryptoboss%2Fsupertg&branch=main&instance_type=free&instances_min=0)
 
 
 Bot username
