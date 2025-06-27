@@ -16,17 +16,14 @@ RUN apk add --no-cache \
     aria2 \
     make \
     g++ \
-    cmake && \
-    wget -q https://github.com/axiomatic-systems/Bento4/archive/v1.6.0-639.zip && \
-    unzip v1.6.0-639.zip && \
-    cd Bento4-1.6.0-639 && \
-    mkdir build && \
-    cd build && \
-    cmake .. && \
-    make -j$(nproc) && \
-    cp mp4decrypt /usr/local/bin/ &&\
-    cd ../.. && \
-    rm -rf Bento4-1.6.0-639 v1.6.0-639.zip
+    cmake \
+    unzip \
+    wget && \
+    wget -q https://www.bok.net/Bento4/binary/bento4-1-6-0-639.x86_64-unknown-linux.zip && \
+    unzip bento4-1-6-0-639.x86_64-unknown-linux.zip -d /opt/bento4 && \
+    cp /opt/bento4/bin/mp4decrypt /usr/local/bin/ && \
+    chmod +x /usr/local/bin/mp4decrypt && \
+    rm -rf /opt/bento4 bento4-1-6-0-639.x86_64-unknown-linux.zip
 
 # Install Python dependencies
 RUN pip3 install --no-cache-dir --upgrade pip \
