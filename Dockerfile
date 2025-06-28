@@ -35,4 +35,4 @@ RUN pip install --no-cache-dir -U pip \
 EXPOSE 8000
 
 # Start both processes (Flask + Bot)
-CMD ["supervisord", "-c", "/etc/supervisord.conf"]
+CMD ["python3", "run.py"]
