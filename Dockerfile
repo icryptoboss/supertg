@@ -1,34 +1,38 @@
-# Use a Python 3.9.6 Alpine base image
+# Use Alpine-based Python image
 FROM python:3.9.6-alpine3.14
 
-# Set the working directory
+# Set working dir
 WORKDIR /app
 
-# Copy all files from the current directory to the container's /app directory
+# Copy all files
 COPY . .
 
-# Install necessary dependencies
+# Install system deps
 RUN apk add --no-cache \
     gcc \
+    g++ \
+    make \
+    cmake \
     libffi-dev \
     musl-dev \
     ffmpeg \
     aria2 \
-    make \
-    g++ \
-    cmake \
     unzip \
-    wget && \
+    wget \
+    supervisor && \
     wget -q https://www.bok.net/Bento4/binary/bento4-1-6-0-639.x86_64-unknown-linux.zip && \
     unzip bento4-1-6-0-639.x86_64-unknown-linux.zip -d /opt/bento4 && \
     cp /opt/bento4/bin/mp4decrypt /usr/local/bin/ && \
     chmod +x /usr/local/bin/mp4decrypt && \
     rm -rf /opt/bento4 bento4-1-6-0-639.x86_64-unknown-linux.zip
 
-# Install Python dependencies
-RUN pip3 install --no-cache-dir --upgrade pip \
-    && pip3 install --no-cache-dir --upgrade -r requirements.txt \
-    && python3 -m pip install -U yt-dlp
+# Install Python packages
+RUN pip install --no-cache-dir -U pip \
+    && pip install --no-cache-dir -r requirements.txt \
+    && pip install -U yt-dlp
 
-# Set the command to run the application
-CMD ["sh", "-c", "gunicorn app:app & python3 main.py"]
+# Expose port (for Flask)
+EXPOSE 8000
+
+# Start both processes (Flask + Bot)
+CMD ["supervisord", "-c", "/etc/supervisord.conf"]
