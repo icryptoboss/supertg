@@ -1,37 +1,37 @@
-# Use a Python 3.9.6 Alpine base image
-FROM python:3.9.6-alpine3.14
+# Use a more compatible image (Alpine can break yt-dlp/mp4decrypt)
+FROM python:3.9-slim
 
-# Set the working directory
+# Set working directory
 WORKDIR /app
 
-# Copy all files from the current directory to the container's /app directory
+# Copy all files
 COPY . .
 
-# Install necessary dependencies
-RUN apk add --no-cache \
-    gcc \
-    libffi-dev \
-    musl-dev \
+# Install dependencies
+RUN apt-get update && apt-get install -y \
     ffmpeg \
     aria2 \
-    make \
+    gcc \
     g++ \
-    cmake && \
-    wget -q https://github.com/axiomatic-systems/Bento4/archive/v1.6.0-639.zip && \
-    unzip v1.6.0-639.zip && \
-    cd Bento4-1.6.0-639 && \
-    mkdir build && \
-    cd build && \
-    cmake .. && \
-    make -j$(nproc) && \
-    cp mp4decrypt /usr/local/bin/ &&\
-    cd ../.. && \
-    rm -rf Bento4-1.6.0-639 v1.6.0-639.zip
+    libffi-dev \
+    make \
+    cmake \
+    unzip \
+    wget \
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
-RUN pip3 install --no-cache-dir --upgrade pip \
-    && pip3 install --no-cache-dir --upgrade -r requirements.txt \
-    && python3 -m pip install -U yt-dlp
+# Build and install mp4decrypt
+RUN wget https://www.bok.net/Bento4/binaries/Bento4-SDK-1-6-0-640.x86_64-unknown-linux.zip && \
+    unzip Bento4-SDK-1-6-0-640.x86_64-unknown-linux.zip && \
+    cp Bento4-SDK-1-6-0-640.x86_64-unknown-linux/bin/mp4decrypt /usr/local/bin/ && \
+    chmod +x /usr/local/bin/mp4decrypt && \
+    rm -rf Bento4-SDK-1-6-0-640.x86_64-unknown-linux.zip
 
-# Set the command to run the application
+# Install Python packages
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir yt-dlp
+
+# Start bot and Flask app
 CMD ["sh", "-c", "gunicorn app:app & python3 main.py"]
