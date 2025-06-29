@@ -1,52 +1,53 @@
 from flask import Flask
+import requests
+
 app = Flask(__name__)
 
 @app.route('/')
-def hello_world():
-    return """
-<!DOCTYPE html>
-<html lang="en">
+def home():
+    try:
+        # Fetch a random cute dog image
+        dog_img_url = requests.get("https://dog.ceo/api/breeds/image/random").json().get("message")
+    except:
+        # Fallback if API fails
+        dog_img_url = "https://images.unsplash.com/photo-1601758123927-196d5fcd53b4"
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<link rel="stylesheet" type="text/css" href="https://tinypic.host/images/2025/02/07/DeWatermark.ai_1738952933236-1.png">
-    <titleSudoR2spr Repository</title>
-	<link rel="icon" type="image/x-icon" href="https://tinypic.host/images/2025/02/07/DeWatermark.ai_1738952933236-1.png">
-
-</head>
-
-<body>
-    <div class="container" style="bg-dark text-red text-center py-3 mt-5">
-        <a href="https://github.com/nikhilsaini098" class="card">
-            <p>
-              />▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄<br 
-	      />██░▄▄▄░█░▄▄▀█▄░▄██░▀██░█▄░▄██<br 
-              />██▄▄▄▀▀█░▀▀░██░███░█░█░██░███<br 
-	      />██░▀▀▀░█░██░█▀░▀██░██▄░█▀░▀██<br 
-              />▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀<br />
-                                             <br>
-
-                <b>v2.0.0</b>
-            </p>
-        </a>
-    </div>
-	<br></br><br></br><br></br>
-	<footer class="bg-dark text-white text-center py-3 mt-5">
-	<center><img loading="lazy" class="object-none object-center" src="https://tinypic.host/images/2025/04/28/IMG_20250428_085026_585.jpg" width="40" height="40">
-        Powered By SAINI 
-		<img loading="lazy" class="object-none object-center" src="https://tinypic.host/images/2025/04/28/IMG_20250428_085026_585.jpg" width="40" height="40">
-		<div class="footer__copyright">
-            <p class="footer__copyright-info">
-                © 2024 Video Downloader. All rights reserved.
-            </p>
-        </div>
-    </footer></center>
-</body>
-
-</html>
-"""
-
+    return f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Cute Dog Viewer</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {{
+                background-color: #fff;
+                font-family: 'Segoe UI', sans-serif;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                height: 100vh;
+                margin: 0;
+            }}
+            img {{
+                max-width: 90%;
+                height: auto;
+                border-radius: 12px;
+                box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+            }}
+            h1 {{
+                font-size: 1.5em;
+                margin-bottom: 20px;
+            }}
+        </style>
+    </head>
+    <body>
+        <h1>Here's a random cute dog 🐶</h1>
+        <img src="{dog_img_url}" alt="Cute Dog">
+    </body>
+    </html>
+    """
 
 if __name__ == "__main__":
     app.run()
