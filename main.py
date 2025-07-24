@@ -1890,7 +1890,7 @@ def reset_and_set_commands():
     commands = [
         {"command": "start", "description": "✅ Check Alive the Bot"},
         {"command": "stop", "description": "🚫 Stop the ongoing process"},
-        {"command": "cp", "description": "📚 Gwt  Classplus Course Txt"},
+        {"command": "cp", "description": "📚 Get  Classplus Course Txt"},
         {"command": "broadcast", "description": "📢 Broadcast to All Users"},
         {"command": "broadusers", "description": "👨‍❤️‍👨 All Broadcasting Users"},
         {"command": "drm", "description": "📑 Upload .txt file"},
