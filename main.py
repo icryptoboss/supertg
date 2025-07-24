@@ -19,6 +19,7 @@ from base64 import b64encode, b64decode
 from logs import logging
 from bs4 import BeautifulSoup
 import saini as helper
+import cp as classplus_helper
 from utils import progress_bar
 from vars import API_ID, API_HASH, BOT_TOKEN, OWNER, CREDIT, AUTH_USERS, TOTAL_USERS
 from aiohttp import ClientSession
@@ -37,6 +38,7 @@ import aiohttp
 import aiofiles
 import zipfile
 import shutil
+from collections import defaultdict
 import ffmpeg
 
 # Initialize the bot
@@ -595,7 +597,8 @@ async def help_button(client, callback_query):
         f"▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰\n" 
         f"📌 𝗠𝗮𝗶𝗻 𝗙𝗲𝗮𝘁𝘂𝗿𝗲𝘀:\n\n"  
         f"➥ /start – Bot Status Check\n"
-        f"➥ /drm – Extract from .txt (Auto)\n"
+        f"➥ /cp –  Get Classplus Course Txt\n"
+        f"➥ /drm – Download from .txt (Auto)\n"
         f"➥ /y2t – YouTube → .txt Converter\n"  
         f"➥ /ytm – YouTube → .mp3 downloader\n"  
         f"➥ /t2t – Text → .txt Generator\n" 
@@ -855,7 +858,231 @@ async def send_logs(client: Client, m: Message):  # Correct parameter name
     except Exception as e:
         await m.reply_text(f"**Error sending logs:**\n<blockquote>{e}</blockquote>")
 
+@bot.on_message(filters.command(["cp"]))
+async def classplus_downloader(client: Client, m: Message):
+    if m.chat.id not in AUTH_USERS:
+        await m.reply_text(f"<blockquote>__**Oopss! You are not a Premium member\nPLEASE /upgrade YOUR PLAN\nSend me your user id for authorization\nYour User id**__ - `{m.chat.id}`</blockquote>\n")
+        return
 
+    editable = await m.reply_text("<b>Hello! Please send me the Classplus Organization Code. (e.g., `testbook`)</b>")
+
+    try:
+        # 1. Get Org Code
+        input_org_code: Message = await bot.listen(m.chat.id, timeout=120)
+        org_code = input_org_code.text.strip()
+        await input_org_code.delete()
+        await editable.edit(f"🔄 Fetching organization details for `'{org_code}'`...")
+
+        # 2. Get Org ID and Courses
+        org_id = await classplus_helper.get_org_id(org_code)
+        if not org_id:
+            await editable.edit("❌ **Invalid Organization Code.** Please try again.")
+            return
+
+        await editable.edit(f"✅ Organization found! Fetching course list...")
+        courses = await classplus_helper.get_course_list(org_id)
+        if not courses:
+            await editable.edit("❌ **No courses found for this organization or the API token is invalid/expired.**")
+            return
+
+        # 3. Display courses and get user selection
+        course_list_text = "📚 **Select a course to download by replying with its number:**\n\n"
+        for i, course in enumerate(courses, 1):
+            course_list_text += f"**{i}.** {course.get('name', 'N/A')}\n"
+        
+        await editable.edit(course_list_text)
+        
+        input_course_num: Message = await bot.listen(m.chat.id, timeout=120)
+        try:
+            course_index = int(input_course_num.text.strip()) - 1
+            if not (0 <= course_index < len(courses)):
+                raise ValueError
+            selected_course = courses[course_index]
+        except (ValueError, IndexError):
+            await input_course_num.reply_text("❌ **Invalid selection.** Please start over.")
+            await editable.delete()
+            return
+        
+        await input_course_num.delete()
+        course_id = selected_course.get('id')
+        course_name = selected_course.get('name', 'course').replace(' ', '_').replace('/', '_')
+        await editable.edit(f"✅ Course `'{selected_course.get('name')}'` selected.\n\n**Now, crawling all content. This might take a while...** ⏳")
+
+        # 4. Crawl all content
+        all_videos = await classplus_helper.get_all_content(org_id, course_id)
+
+        if not all_videos:
+            await editable.edit("❌ **No video content found in this course.**")
+            return
+        
+        await editable.edit(f"✅ **Crawling complete!** Found `{len(all_videos)}` videos.\n\n"
+                            "How do you want the output?\n"
+                            "Reply `single` for one combined `.txt` file.\n"
+                            "Reply `zip` for a `.zip` file with separate `.txt` files.\n"
+                            "Reply `direct` to send each folder's `.txt` file directly.")
+
+        # 5. Get output format preference
+        input_format: Message = await bot.listen(m.chat.id, timeout=120)
+        output_format = input_format.text.strip().lower()
+        await input_format.delete()
+
+        await editable.edit("⚙️ **Generating your file(s)...**")
+
+        # 6. Generate and send file(s) - Improved for performance and reliability
+        if output_format == 'single':
+            await editable.edit("⚙️ **Generating combined text file...**")
+            safe_course_name = re.sub(r'[\\/*?:"<>|]', '_', course_name)
+            file_path = os.path.join("downloads", f"{safe_course_name}.txt")
+            os.makedirs("downloads", exist_ok=True)
+            
+            loop = asyncio.get_running_loop()
+
+            def blocking_file_creation():
+                with open(file_path, 'w', encoding='utf-8') as f:
+                    for video in all_videos:
+                        clean_video_name = re.sub(r'[:\n\r]', '-', video.get('name', 'Untitled'))
+                        folder_path = video.get('folder')
+                        if folder_path:
+                            clean_folder_path = folder_path.replace('/', ' - ')
+                            title = f"({clean_folder_path}) - {clean_video_name}"
+                        else:
+                            title = clean_video_name
+                        
+                        url = video.get('vid_url', '')
+                        f.write(f"{title}: {url}\n")
+                return file_path
+
+            try:
+                created_file_path = await loop.run_in_executor(None, blocking_file_creation)
+                await client.send_document(m.chat.id, document=created_file_path, caption=f"✅ Here is the content for **{course_name}**.")
+            except Exception as e:
+                await editable.edit(f"❌ Failed to create or send the text file. Error: {e}")
+                logging.error(f"Single file creation/upload failed for course '{course_name}': {e}", exc_info=True)
+            finally:
+                if os.path.exists(file_path):
+                    os.remove(file_path)
+
+        elif output_format == 'zip':
+            await editable.edit("⚙️ **Processing and zipping files... This may take a moment for large courses.**")
+            
+            # Sanitize course name to be a valid filename
+            safe_course_name = re.sub(r'[\\/*?:"<>|]', '_', course_name)
+
+            videos_by_folder = defaultdict(list)
+            for video in all_videos:
+                folder_path = video.get('folder')
+                if folder_path:
+                    # Get only the top-level folder
+                    top_level_folder = folder_path.split('/')[0]
+                else:
+                    top_level_folder = "Uncategorized" # For videos in the root
+                
+                # Sanitize the top-level folder name for the .txt filename
+                safe_folder_name = re.sub(r'[\\/*?:"<>|]', '_', top_level_folder)
+                videos_by_folder[safe_folder_name].append(video)
+
+            loop = asyncio.get_running_loop()
+
+            # This function contains blocking I/O operations
+            def blocking_zip_creation():
+                zip_base_path = os.path.join("downloads", safe_course_name)
+                temp_folder_path = os.path.join("downloads", f"temp_{safe_course_name}")
+                os.makedirs(temp_folder_path, exist_ok=True)
+
+                for folder, videos in videos_by_folder.items():
+                    # The filename is the sanitized top-level folder name
+                    txt_file_path = os.path.join(temp_folder_path, f"{folder}.txt")
+                    with open(txt_file_path, 'w', encoding='utf-8') as f:
+                        for video in videos:
+                            # Inside the file, we write the full path for context
+                            clean_video_name = re.sub(r'[:\n\r]', '-', video.get('name', 'Untitled'))
+                            full_folder_path = video.get('folder')
+                            
+                            if full_folder_path:
+                                clean_full_folder_path = full_folder_path.replace('/', ' - ')
+                                title = f"({clean_full_folder_path}) - {clean_video_name}"
+                            else:
+                                title = clean_video_name
+                                
+                            f.write(f"{title}: {video.get('vid_url', '')}\n")
+                
+                # Use shutil.make_archive for robust zip creation
+                archive_path = shutil.make_archive(zip_base_path, 'zip', temp_folder_path)
+                return archive_path, temp_folder_path
+
+            zip_path = None
+            temp_folder_path = None
+            try:
+                # Run the blocking I/O in a separate thread to avoid freezing the bot
+                zip_path, temp_folder_path = await loop.run_in_executor(None, blocking_zip_creation)
+                
+                await editable.edit(f"✅ Zipping complete! Now uploading...")
+                await client.send_document(m.chat.id, document=zip_path, caption=f"✅ Here is the folder-wise content for **{course_name}**.")
+            except Exception as e:
+                await editable.edit(f"❌ Failed to create or send the zip file. Error: {e}")
+                logging.error(f"Zip creation/upload failed for course '{course_name}': {e}", exc_info=True)
+            finally:
+                # Clean up created files and directories
+                if zip_path and os.path.exists(zip_path):
+                    os.remove(zip_path)
+                if temp_folder_path and os.path.exists(temp_folder_path):
+                    shutil.rmtree(temp_folder_path)
+
+        elif output_format == 'direct':
+            videos_by_folder = defaultdict(list)
+            for video in all_videos:
+                folder_path = video.get('folder') or "Root"
+                videos_by_folder[folder_path].append(video)
+
+            await editable.edit(f"✅ Found content in {len(videos_by_folder)} folders. Sending `.txt` files one by one...")
+
+            safe_course_name = re.sub(r'[\\/*?:"<>|]', '_', course_name)
+            temp_folder_path = os.path.join("downloads", f"temp_direct_{safe_course_name}")
+            os.makedirs(temp_folder_path, exist_ok=True)
+
+            try:
+                # Sort folders alphabetically for predictable order
+                for folder_path in sorted(videos_by_folder.keys()):
+                    videos = videos_by_folder[folder_path]
+                    
+                    # Create a safe filename from the folder path
+                    safe_filename = re.sub(r'[\\/*?:"<>|]', '_', folder_path)
+                    txt_file_path = os.path.join(temp_folder_path, f"{safe_filename}.txt")
+                    
+                    with open(txt_file_path, 'w', encoding='utf-8') as f:
+                        for video in videos:
+                            clean_video_name = re.sub(r'[:\n\r]', '-', video.get('name', 'Untitled'))
+                            f.write(f"{clean_video_name}: {video.get('vid_url', '')}\n")
+                    
+                    try:
+                        await client.send_document(
+                            m.chat.id, 
+                            document=txt_file_path, 
+                            caption=f"✅ Content for folder: **{folder_path}**"
+                        )
+                    except Exception as e:
+                        await m.reply_text(f"Could not send file for folder `{folder_path}`. Error: {e}")
+                        logging.warning(f"Failed to send direct file for folder '{folder_path}': {e}")
+                    await asyncio.sleep(1) # Avoid flood waits
+                
+                await editable.edit("✅ All `.txt` files have been sent.")
+                await asyncio.sleep(5)
+            finally:
+                if os.path.exists(temp_folder_path):
+                    shutil.rmtree(temp_folder_path)
+
+        else:
+            await editable.edit("❌ **Invalid format selection.** Please start over.")
+            return
+        
+        await editable.delete()
+
+    except asyncio.TimeoutError:
+        await editable.edit("⌛ **Request timed out.** Please start over.")
+    except Exception as e:
+        await editable.edit(f"An error occurred: `{str(e)}`")
+        logging.error(f"Classplus downloader error: {e}", exc_info=True)
+        
 @bot.on_message(filters.command(["drm"]) )
 async def txt_handler(bot: Client, m: Message):  
     global processing_request, cancel_requested, cancel_message
@@ -1062,8 +1289,20 @@ async def txt_handler(bot: Client, m: Message):
             Vxy = links[i][1].replace("file/d/","uc?export=download&id=").replace("www.youtube-nocookie.com/embed", "youtu.be").replace("?modestbranding=1", "").replace("/view?usp=sharing","")
             url = "https://" + Vxy
             link0 = "https://" + Vxy
+            
+            # Parse folder and video title from the line
+            original_name = links[i][0].strip()
+            folder_name = ""
+            video_title = original_name
 
-            name1 = links[i][0].replace("(", "[").replace(")", "]").replace("_", "").replace("\t", "").replace(":", "").replace("/", "").replace("+", "").replace("#", "").replace("|", "").replace("@", "").replace("*", "").replace(".", "").replace("https", "").replace("http", "").strip()
+            # This regex looks for (Folder) - Title or [Folder] - Title patterns
+            match = re.match(r'[\(\[](.+?)[\)\]]\s*-\s*(.+)', original_name)
+            if match:
+                folder_name = match.group(1).strip()
+                video_title = match.group(2).strip()
+
+            name1 = video_title.replace("_", " ").replace("\t", "").replace(":", "").replace("/", "").replace("+", "").replace("#", "").replace("|", "").replace("@", "").replace("*", "").replace(".", "").replace("https", "").replace("http", "").strip()
+            
             if "," in raw_text3:
                  name = f'{PRENAME} {name1[:60]}'
             else:
@@ -1145,13 +1384,14 @@ async def txt_handler(bot: Client, m: Message):
                 cmd = f'yt-dlp -f "{ytf}" "{url}" -o "{name}.mp4"'
 
             try:
-                cc = f'[🎥]Vid Id : {str(count).zfill(3)}\n**Video Title :** `{name1} [{res}p].mkv`\n<blockquote><b>Batch Name :</b> {b_name}</blockquote>\n\n**Extracted by➤**{CR}\n'
-                cc1 = f'[📕]Pdf Id : {str(count).zfill(3)}\n**File Title :** `{name1}.pdf`\n<blockquote><b>Batch Name :</b> {b_name}</blockquote>\n\n**Extracted by➤**{CR}\n'
-                cczip = f'[📁]Zip Id : {str(count).zfill(3)}\n**Zip Title :** `{name1}.zip`\n<blockquote><b>Batch Name :</b> {b_name}</blockquote>\n\n**Extracted by➤**{CR}\n' 
-                ccimg = f'[🖼️]Img Id : {str(count).zfill(3)}\n**Img Title :** `{name1}.jpg`\n<blockquote><b>Batch Name :</b> {b_name}</blockquote>\n\n**Extracted by➤**{CR}\n'
-                ccm = f'[🎵]Audio Id : {str(count).zfill(3)}\n**Audio Title :** `{name1}.mp3`\n<blockquote><b>Batch Name :</b> {b_name}</blockquote>\n\n**Extracted by➤**{CR}\n'
-                cchtml = f'[🌐]Html Id : {str(count).zfill(3)}\n**Html Title :** `{name1}.html`\n<blockquote><b>Batch Name :</b> {b_name}</blockquote>\n\n**Extracted by➤**{CR}\n'
-                  
+                folder_line = f"**Folder Name :** {folder_name}\n\n" if folder_name else ""
+                cc = f'[🎥]Vid Id : {str(count).zfill(3)}\n\n{folder_line}**Video Title :** {name1} [{res}p].mkv\n\n<blockquote><b>Batch Name :</b> {b_name}</blockquote>\n\n**Extracted by➤**{CR}\n'
+                cc1 = f'[📕]Pdf Id : {str(count).zfill(3)}\n\n{folder_line}**File Title :** {name1}.pdf\n\n<blockquote><b>Batch Name :</b> {b_name}</blockquote>\n\n**Extracted by➤**{CR}\n'
+                cczip = f'[📁]Zip Id : {str(count).zfill(3)}\n\n{folder_line}**Zip Title :** {name1}.zip\n\n<blockquote><b>Batch Name :</b> {b_name}</blockquote>\n\n**Extracted by➤**{CR}\n' 
+                ccimg = f'[🖼️]Img Id : {str(count).zfill(3)}\n\n{folder_line}**Img Title :** {name1}.jpg\n\n<blockquote><b>Batch Name :</b> {b_name}</blockquote>\n\n**Extracted by➤**{CR}\n'
+                ccm = f'[🎵]Audio Id : {str(count).zfill(3)}\n\n{folder_line}**Audio Title :** {name1}.mp3\n\n<blockquote><b>Batch Name :</b> {b_name}</blockquote>\n\n**Extracted by➤**{CR}\n'
+                cchtml = f'[🌐]Html Id : {str(count).zfill(3)}\n\n{folder_line}**Html Title :** {name1}.html\n\n<blockquote><b>Batch Name :</b> {b_name}</blockquote>\n\n**Extracted by➤**{CR}\n'
+                 
                 if "drive" in url:
                     try:
                         ka = await helper.download(url, name)
@@ -1499,8 +1739,8 @@ async def text_handler(bot: Client, m: Message):
                 cmd = f'yt-dlp -f "{ytf}" "{url}" -o "{name}.mp4"'
 
             try:
-                cc = f'🎞️ `{name} [{res}].mp4`\n<blockquote expandable>🔗𝐋𝐢𝐧𝐤 » {link}</blockquote>\n🌟𝐄𝐱𝐭𝐫𝐚𝐜𝐭𝐞𝐝 𝐁𝐲 » {CREDIT}'
-                cc1 = f'📕 `{name}`\n<blockquote expandable>🔗𝐋𝐢𝐧𝐤 » [Click Here to Open]({link})</blockquote>\n\n🌟𝐄𝐱𝐭𝐫𝐚𝐜𝐭𝐞𝐝 𝐁𝐲 » {CREDIT}'
+                cc = f'🎞️𝐓𝐢𝐭𝐥𝐞 » {name} [{res}].mp4\n🔗𝐋𝐢𝐧𝐤 » <a href="{link}">__**CLICK HERE**__</a>\n\n🌟𝐄𝐱𝐭𝐫𝐚𝐜𝐭𝐞𝐝 𝐁𝐲 » `{CREDIT}`'
+                cc1 = f'📕𝐓𝐢𝐭𝐥𝐞 » {name}\n🔗𝐋𝐢𝐧𝐤 » <a href="{link}">__**CLICK HERE**__</a>\n\n🌟𝐄𝐱𝐭𝐫𝐚𝐜𝐭𝐞𝐝 𝐁𝐲 » `{CREDIT}`'
                   
                 if "drive" in url:
                     try:
@@ -1652,6 +1892,7 @@ def reset_and_set_commands():
     commands = [
         {"command": "start", "description": "✅ Check Alive the Bot"},
         {"command": "stop", "description": "🚫 Stop the ongoing process"},
+        {"command": "cp", "description": "📚 Gwt  Classplus Course Txt"},
         {"command": "broadcast", "description": "📢 Broadcast to All Users"},
         {"command": "broadusers", "description": "👨‍❤️‍👨 All Broadcasting Users"},
         {"command": "drm", "description": "📑 Upload .txt file"},
