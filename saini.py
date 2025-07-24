@@ -296,8 +296,8 @@ async def send_vid(bot: Client, m: Message, cc, filename, thumb, name, prog, cha
     subprocess.run(f'ffmpeg -i "{filename}" -ss 00:00:10 -vframes 1 "{filename}.jpg"', shell=True)
     await prog.delete (True)
     reply1 = await bot.send_message(channel_id, f"**📩 Uploading Video 📩:-**\n<blockquote>**{name}**</blockquote>")
-    reply = await m.reply_text(f"<b>Generate Thumbnail:</b>\n<blockquote><b>{name}</b></blockquote>")
-     try:
+    reply = await m.reply_text(f"**Generate Thumbnail:**\n<blockquote>**{name}**</blockquote>")
+    try:
         if thumb == "/d":
             thumbnail = f"{filename}.jpg"
         else:
