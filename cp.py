@@ -1,11 +1,11 @@
-import aiohttp, json, base64, re
+import aiohttp, json, base64, re, asyncio
 from functools import lru_cache
 import time
 import os
 
 # ------------------- 🔒 Classplus Token -------------------
 # This should be configured in your bot's environment variables
-X_ACCESS_TOKEN = os.environ.get('X_ACCESS_TOKEN', "eyJhbGciOiJIUzM4NCIsInR5cCI6IkpXVCJ9.eyJpZCI6MTU0ODk2NzExLCJvcmdJZCI6Nzk1NjAyLCJ0eXBlIjoxLCJtb2JpbGUiOiI5MTc2NTE4NjkxODUiLCJuYW1lIjoicm9reSIsImVtYWlsIjoiaHVtbWluZ2JpcmQ4MTY1NEBtYWlsc2hhbi5jb20iLCJpc0ZpcnN0TG9naW4iOnRydWUsImRlZmF1bHRMYW5ndWFnZSI6IkVOIiwiY291bnRyeUNvZGUiOiJJTiIsImlzSW50ZXJuYXRpb25hbCI6MCwiaXNEaXkiOnRydWUsImxvZ2luVmlhIjoiT3RwIiwiZmluZ2VycHJpbnRJZCI6IjJlOGVlMGMzYjM5MjNlZTZhMTU5ZDgzNWFmYjZjYjYxIiwiaWF0IjoxNzUxMDkxNDE4LCJleHAiOjE3NTE2OTYyMTh9.g6qaHUAeRY3etEl2GG6kBjDwIX1wnEPHKRcqyFOaqh6enfoIkf6Pn-JNnKjcPTjF")
+X_ACCESS_TOKEN = os.environ.get('X_ACCESS_TOKEN', "eyJhbGciOiJIUzM4NCIsInR5cCI6IkpXVCJ9.eyJpZCI6MTU0ODk2NzExLCJvcmdJZCI6Nzk1NjAyLCJ0eXBlIjoxLCJtb2JpbGUiOiI5MTc2NTE4NjkxODUiLCJuYW1lIjoicm9reSIsImVtYWlsIjoiaHVtbWluZ2JpcmQ4MTY1NEBtYWlsc2hhbi5jb20iLCJpc0ZpcnN0TG9naW4iOnRydWUsImRlZmF1bHRMYW5ndWFnZSI6IjJlOGVlMGMzYjM5MjNlZTZhMTU5ZDgzNWFmYjZjYjYxIiwiaWF0IjoxNzUxMDkxNDE4LCJleHAiOjE3NTE2OTYyMTh9.g6qaHUAeRY3etEl2GG6kBjDwIX1wnEPHKRcqyFOaqh6enfoIkf6Pn-JNp2KjcPTjF")
 
 HEADERS = {
     "x-access-token": X_ACCESS_TOKEN,
@@ -61,65 +61,98 @@ def encode_payload(orgid, courseid):
     }
     return base64.b64encode(json.dumps(payload).encode()).decode()
 
-async def fetch_folder_contents(encoded_payload, folder_id):
+async def fetch_folder_contents(session, encoded_payload, folder_id):
     url = f"https://api.classplusapp.com/v2/course/preview/content/list/{encoded_payload}?folderId={folder_id}&limit=200&offset=0"
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(url, headers=HEADERS) as resp:
-                resp.raise_for_status()
-                return await resp.json()
-    except aiohttp.ClientError as e:
-        print(f"Error fetching folder contents: {e}")
-        return {}
-    except json.JSONDecodeError:
-        print(f"Failed to decode JSON from folder contents response for folder_id {folder_id}.")
-        return {}
+        async with session.get(url, headers=HEADERS) as resp:
+            resp.raise_for_status()
+            return folder_id, await resp.json() # Return folder_id along with data
+    except (aiohttp.ClientError, json.JSONDecodeError) as e:
+        print(f"Worker failed for folder {folder_id}: {e}")
+        return folder_id, None
 
-async def get_all_content(orgid, courseid):
-    """
-    Crawls all folders and videos for a given course and returns them.
-    """
-    print(f"Starting content crawl for course {courseid}")
+async def get_course_content_fast(orgid, courseid):
+    """Crawls the entire course content in a single, fast pass."""
+    print(f"Starting fast content crawl for course {courseid}")
     start_time = time.time()
-
-    all_content = []
     encoded_payload = encode_payload(orgid, courseid)
+    
+    root = {'id': 0, 'name': 'Root', 'subfolders': [], 'videos': [], 'parent_id': None, 'path': ''}
+    all_folders_data = {0: root} # Map folder_id to its dictionary representation
 
-    # A queue to manage folders to visit: (folder_id, folder_path_string)
-    queue = [(0, "")]  # Start with root folder (ID 0)
+    folders_to_fetch = {0} # Start with the root folder ID
+    fetched_folders = set()
 
-    while queue:
-        current_folder_id, current_path = queue.pop(0)
+    async with aiohttp.ClientSession() as session:
+        while folders_to_fetch:
+            current_batch_ids = list(folders_to_fetch)
+            folders_to_fetch.clear()
 
-        data = await fetch_folder_contents(encoded_payload, current_folder_id)
+            tasks = [fetch_folder_contents(session, encoded_payload, fid) for fid in current_batch_ids]
+            results = await asyncio.gather(*tasks)
 
-        if data.get("status") != "success":
-            print(f"Failed to fetch content for folder ID {current_folder_id}")
-            continue
+            for folder_id, data in results:
+                if not data or data.get("status") != "success":
+                    continue
 
-        # Sort items by sequence number before processing
-        items = sorted(data.get("data", []), key=lambda x: x.get("sequenceNo", 0))
+                fetched_folders.add(folder_id)
+                items = sorted(data.get("data", []), key=lambda x: x.get("sequenceNo", 0))
 
-        for item in items:
-            item_name = item.get("name", "Unnamed")
+                current_folder_dict = all_folders_data[folder_id]
 
-            if item.get("contentType") == 1:  # It's a folder
-                sub_folder_id = item.get("id")
-                new_path = f"{current_path}/{item_name}" if current_path else item_name
-                queue.append((sub_folder_id, new_path))
+                for item in items:
+                    if item.get("contentType") == 1:  # It's a folder
+                        sub_folder_id = item.get("id")
+                        if sub_folder_id not in all_folders_data: # Avoid re-adding existing folders
+                            new_folder = {
+                                'id': sub_folder_id,
+                                'name': item.get("name", "Unnamed"),
+                                'subfolders': [],
+                                'videos': [],
+                                'parent_id': folder_id,
+                                'path': os.path.join(current_folder_dict['path'], item.get("name", "Unnamed"))
+                            }
+                            current_folder_dict['subfolders'].append(new_folder)
+                            all_folders_data[sub_folder_id] = new_folder
+                            folders_to_fetch.add(sub_folder_id) # Add to next batch to fetch
+                    elif item.get("thumbnailUrl"): # It's a video
+                        video_url = transform_thumbnail_to_video(item.get("thumbnailUrl"))
+                        if video_url:
+                            current_folder_dict['videos'].append({
+                                'name': item.get("name", "Unnamed"),
+                                'vid_url': video_url,
+                                'folder_path': current_folder_dict['path'] # Store the full path
+                            })
+    
+    print(f"Content crawl completed in {time.time() - start_time:.2f} seconds.")
+    return root
 
-            elif item.get("thumbnailUrl"):  # It's a video
-                video_url = transform_thumbnail_to_video(item.get("thumbnailUrl"))
-                if video_url:
-                    all_content.append({
-                        "folder": current_path,
-                        "name": item_name,
-                        "vid_url": video_url,
-                    })
+async def get_videos_from_folder_id(folder_structure, folder_id):
+    """
+    Recursively gets all videos from a specific folder ID using the cached structure.
+    """
+    all_videos = []
+    
+    def find_folder(structure, target_id):
+        if structure['id'] == target_id:
+            return structure
+        for subfolder in structure['subfolders']:
+            found = find_folder(subfolder, target_id)
+            if found:
+                return found
+        return None
 
-    end_time = time.time()
-    print(f"Content crawl completed in {end_time - start_time:.2f} seconds. Found {len(all_content)} videos.")
-    return all_content
+    folder_to_search = find_folder(folder_structure, folder_id)
+
+    def collect_videos(folder):
+        all_videos.extend(folder['videos'])
+        for subfolder in folder['subfolders']:
+            collect_videos(subfolder)
+
+    if folder_to_search:
+        collect_videos(folder_to_search)
+        
+    return all_videos
 
 @lru_cache(maxsize=1000)
 def transform_thumbnail_to_video(url_val):
@@ -151,4 +184,4 @@ def transform_thumbnail_to_video(url_val):
         video_id = url_val.split('/')[-1].split('.')[0]
         return f'https://tb-video.classplusapp.com/{video_id}/master.m3u8'
     return None
-    
+
