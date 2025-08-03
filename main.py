@@ -200,8 +200,6 @@ async def handle_folder_action(client, callback_query):
         with open(file_path, 'w', encoding='utf-8') as f:
             for video in all_videos:
                 if video.get('folder_path'):
-                    with open("debug_path.log", "a") as logf:
-    logf.write(f"{video['folder_path']}\n")
                     path_segments = re.split(r'[\\/]', video['folder_path'])  # ✅ Cross-platform fix
                     formatted_path = ' '.join(f"({segment})" for segment in path_segments)
                     display_title = f"{formatted_path} - {video['name']}"
