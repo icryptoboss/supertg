@@ -3,7 +3,6 @@ from functools import lru_cache
 import time
 import os
 
-# ------------------- 🔒 Classplus Token -------------------
 # This should be configured in your bot's environment variables
 X_ACCESS_TOKEN = os.environ.get('X_ACCESS_TOKEN', "eyJhbGciOiJIUzM4NCIsInR5cCI6IkpXVCJ9.eyJpZCI6MTU0ODk2NzExLCJvcmdJZCI6Nzk1NjAyLCJ0eXBlIjoxLCJtb2JpbGUiOiI5MTc2NTE4NjkxODUiLCJuYW1lIjoicm9reSIsImVtYWlsIjoiaHVtbWluZ2JpcmQ4MTY1NEBtYWlsc2hhbi5jb20iLCJpc0ZpcnN0TG9naW4iOnRydWUsImRlZmF1bHRMYW5ndWFnZSI6IjJlOGVlMGMzYjM5MjNlZTZhMTU5ZDgzNWFmYjZjYjYxIiwiaWF0IjoxNzUxMDkxNDE4LCJleHAiOjE3NTE2OTYyMTh9.g6qaHUAeRY3etEl2GG6kBjDwIX1wnEPHKRcqyFOaqh6enfoIkf6Pn-JNp2KjcPTjF")
 
