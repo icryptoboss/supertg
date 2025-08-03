@@ -81,22 +81,16 @@ image_urls = [
 ]
 def sanitize_filename(name):
     return re.sub(r'[\\/*?";:<>|:]', '_', name)
-@bot.on_message(filters.command(["cp"]))
+
+@bot.on_message(filters.command("cp") & filters.user(AUTH_USERS))
 async def classplus_downloader_2(client: Client, m: Message):
-    if m.chat.id not in AUTH_USERS:
-        await m.reply_text(f"<blockquote>__**Oopss! You are not a Premium member\nPLEASE /upgrade YOUR PLAN\nSend me your user id for authorization\nYour User id**__ - `{m.chat.id}`</blockquote>\n")
-        return
-
     editable = await m.reply_text("<b>Hello! Please send me the Classplus Organization Code. (e.g., `testbook`)</b>")
-
     try:
-        # 1. Get Org Code
         input_org_code: Message = await bot.listen(m.chat.id, timeout=120)
         org_code = input_org_code.text.strip()
         await input_org_code.delete()
-        await editable.edit(f"🔄 Fetching organization details for `'" + org_code + "'`...")
+        await editable.edit(f"🔄 Fetching organization details for \`'{org_code}'\`...")
 
-        # 2. Get Org ID and Courses
         org_id = await classplus_helper.get_org_id(org_code)
         if not org_id:
             await editable.edit("❌ **Invalid Organization Code.** Please try again.")
@@ -108,18 +102,15 @@ async def classplus_downloader_2(client: Client, m: Message):
             await editable.edit("❌ **No courses found for this organization or the API token is invalid/expired.**")
             return
 
-        # 3. Display courses and get user selection
         course_list_text = "📚 **Select a course to download by replying with its number:**\n\n"
         for i, course in enumerate(courses, 1):
             course_list_text += f"**{i}.** {course.get('name', 'N/A')}\n"
-        
         await editable.edit(course_list_text)
         
         input_course_num: Message = await bot.listen(m.chat.id, timeout=120)
         try:
             course_index = int(input_course_num.text.strip()) - 1
-            if not (0 <= course_index < len(courses)):
-                raise ValueError
+            if not (0 <= course_index < len(courses)): raise ValueError
             selected_course = courses[course_index]
         except (ValueError, IndexError):
             await input_course_num.reply_text("❌ **Invalid selection.** Please start over.")
@@ -130,133 +121,92 @@ async def classplus_downloader_2(client: Client, m: Message):
         course_id = selected_course.get('id')
         raw_course_name = selected_course.get('name', 'course')
         course_name = sanitize_filename(raw_course_name)
-        
-        await editable.edit(f"✅ Course `'" + raw_course_name + "'` selected.\n\n**Crawling all course data, please wait...** ⚡")
+        await editable.edit(f"✅ Course '{raw_course_name}' selected.\n\n**Crawling all course data, please wait...** ⚡")
 
-        # 4. Fetch folder structure
         folder_structure = await classplus_helper.get_course_content_fast(org_id, course_id)
-
         if not folder_structure:
             await editable.edit("❌ **No content found in this course.**")
             return
 
         user_course_data[m.chat.id] = {
-            "org_id": org_id, 
-            "course_id": course_id, 
-            "course_name": course_name,
+            "org_id": org_id, "course_id": course_id, "course_name": course_name,
             "folder_structure": folder_structure
         }
-
-        # 5. Start interactive folder navigation
         await display_folders(client, m, editable, folder_structure)
 
     except asyncio.TimeoutError:
         await editable.edit("⌛ **Request timed out.** Please start over.")
     except Exception as e:
         await editable.edit(f"An error occurred: `{str(e)}`")
-        logging.error(f"Classplus downloader error: {e}", exc_info=True)
 
 async def display_folders(client, message, editable, current_folder, path_id="0"):
     buttons = []
     for folder in current_folder['subfolders']:
         buttons.append([InlineKeyboardButton(folder['name'], callback_data=f"open:{folder['id']}")])
-
     buttons.append([InlineKeyboardButton("Get All Links in This Folder", callback_data=f"get_links:{path_id}")])
     if path_id != "0":
-        parent_id = current_folder.get("parent_id", "0")
-        buttons.append([InlineKeyboardButton(".. Back", callback_data=f"open:{parent_id}")])
-
-    buttons.append([InlineKeyboardButton("Close", callback_data="close_folder_list")])
-
-    folder_display_name = current_folder['name']
-    if current_folder.get('parent_id') is not None and current_folder['parent_id'] != 0:
-        # Find parent folder name for display
-        user_data = user_course_data.get(message.chat.id)
-        if user_data:
-            def find_folder_by_id(structure, target_id):
-                if structure['id'] == target_id:
-                    return structure
-                for subfolder in structure['subfolders']:
-                    found = find_folder_by_id(subfolder, target_id)
-                    if found:
-                        return found
-                return None
-            
-            parent_folder = find_folder_by_id(user_data['folder_structure'], current_folder['parent_id'])
-            if parent_folder:
-                folder_display_name = f"{current_folder['name']} ({parent_folder['name']})"
-
+        buttons.append([InlineKeyboardButton(".. Back", callback_data=f"open:{current_folder.get('parent_id', '0')}")])
+    buttons.append([InlineKeyboardButton("Close", callback_data="close_folder_list:0")])
+    
     try:
-        await editable.edit(f"**Folders in {folder_display_name}:**", reply_markup=InlineKeyboardMarkup(buttons))
+        await editable.edit(f"**Folders in {current_folder['name']}:**", reply_markup=InlineKeyboardMarkup(buttons))
     except ButtonDataInvalid:
-        await editable.edit("Error: Too many folders to display. This is a Telegram limitation.")
+        await editable.edit("Error: Too many folders to display.")
 
 @bot.on_callback_query(filters.regex(r"^(open|get_links|close_folder_list):"))
 async def handle_folder_action(client, callback_query):
     action, data = callback_query.data.split(":", 1)
     message = callback_query.message
     editable = await message.edit_text("Processing...")
-
     user_data = user_course_data.get(message.chat.id)
     if not user_data:
         await editable.edit("Something went wrong, please start over.")
         return
-
-    course_name = user_data["course_name"]
-    folder_structure = user_data["folder_structure"]
-
-    def find_folder(structure, target_id):
-        if structure['id'] == target_id:
-            return structure
-        for subfolder in structure['subfolders']:
-            found = find_folder(subfolder, target_id)
-            if found:
-                return found
-        return None
 
     if action == "close_folder_list":
         await editable.delete()
         return
 
     folder_id = int(data)
-    current_folder = find_folder(folder_structure, folder_id)
-
+    def find_folder(structure, target_id):
+        if structure['id'] == target_id: return structure
+        for subfolder in structure['subfolders']:
+            found = find_folder(subfolder, target_id)
+            if found: return found
+        return None
+    
+    current_folder = find_folder(user_data['folder_structure'], folder_id)
     if not current_folder:
-        await editable.edit("Folder not found. Please try again.")
+        await editable.edit("Folder not found.")
         return
 
     if action == "open":
         await display_folders(client, message, editable, current_folder, str(folder_id))
-
     elif action == "get_links":
         folder_name = sanitize_filename(current_folder['name'])
         await editable.edit(f"Getting links for folder: **{current_folder['name']}**")
-        
-        all_videos = await classplus_helper.get_videos_from_folder_id(folder_structure, folder_id)
+        all_videos = await classplus_helper.get_videos_from_folder_id(user_data['folder_structure'], folder_id)
         
         if not all_videos:
             await editable.edit("No videos found in this folder.")
             return
 
-        file_path = os.path.join("downloads", f"{folder_name} - ({course_name}).txt")
+        file_path = os.path.join("downloads", f"{folder_name} - ({user_data['course_name']}).txt")
         os.makedirs("downloads", exist_ok=True)
         with open(file_path, 'w', encoding='utf-8') as f:
             for video in all_videos:
-                # Include parent folder in the title if available
-                display_title = video['name']
+                # Format the folder path with parentheses around each segment
                 if video.get('folder_path'):
-                    parts = video['folder_path'].split('/')
-                    if parts:
-                        last_parent_folder = parts[-1].strip()
-                        display_title = f"( {last_parent_folder} ) - {video['name']}"
+                    path_segments = video['folder_path'].split('\\')
+                    formatted_path = ' '.join(f"({segment})" for segment in path_segments)
+                    display_title = f"{formatted_path} - {video['name']}"
+                else:
+                    display_title = video['name']
                 f.write(f"{display_title}: {video['vid_url']}\n")
-
-
+        
         await client.send_document(message.chat.id, document=file_path, caption=f"Links from {current_folder['name']}")
         os.remove(file_path)
-        # Do not delete editable here, allow user to continue navigating
-        await display_folders(client, message, editable, current_folder, str(folder_id)) # Re-display the folder
-
+        await display_folders(client, message, editable, current_folder, str(folder_id))
 
 @bot.on_message(filters.command("addauth") & filters.private)
 async def add_auth_user(client: Client, message: Message):
