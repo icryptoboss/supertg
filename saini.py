@@ -214,8 +214,10 @@ def old_download(url, file_name, chunk_size = 1024 * 10 * 10):
 
 
 def human_readable_size(size, decimal_places=2):
-    for unit in ['B', 'KB', 'MB', 'GB', 'TB', 'PB']:
-        if size < 1024.0 or unit == 'PB':
+    unit = 'B' # Initialize unit
+    for unit_candidate in ['B', 'KB', 'MB', 'GB', 'TB', 'PB']:
+        if size < 1024.0 or unit_candidate == 'PB':
+            unit = unit_candidate
             break
         size /= 1024.0
     return f"{size:.{decimal_places}f} {unit}"
@@ -227,6 +229,8 @@ def time_name():
     current_time = now.strftime("%H%M%S")
     return f"{date} {current_time}.mp4"
 
+
+failed_counter = 0 # Initialize failed_counter globally
 
 async def download_video(url,cmd, name):
     download_cmd = f'{cmd} -R 25 --fragment-retries 25 --external-downloader aria2c --downloader-args "aria2c: -x 16 -j 32"'
@@ -244,24 +248,24 @@ async def download_video(url,cmd, name):
             return name
         elif os.path.isfile(f"{name}.webm"):
             return f"{name}.webm"
-        name = name.split(".")[0]
-        if os.path.isfile(f"{name}.mkv"):
-            return f"{name}.mkv"
-        elif os.path.isfile(f"{name}.mp4"):
-            return f"{name}.mp4"
-        elif os.path.isfile(f"{name}.mp4.webm"):
-            return f"{name}.mp4.webm"
+        name_without_ext = os.path.splitext(name)[0] # Corrected usage
+        if os.path.isfile(f"{name_without_ext}.mkv"):
+            return f"{name_without_ext}.mkv"
+        elif os.path.isfile(f"{name_without_ext}.mp4"):
+            return f"{name_without_ext}.mp4"
+        elif os.path.isfile(f"{name_without_ext}.mp4.webm"):
+            return f"{name_without_ext}.mp4.webm"
 
         return name
     except FileNotFoundError as exc:
-        return os.path.isfile.splitext[0] + "." + "mp4"
+        return os.path.splitext(name)[0] + "." + "mp4" # Corrected usage
 
 
-async def send_doc(bot: Client, m: Message, cc, ka, cc1, prog, count, name, channel_id):
-    reply = await bot.send_message(channel_id, f"Downloading pdf:\n<pre><code>{name}</code></pre>")
+async def send_doc(bot: Client, m: Message, cc, ka, cc1, prog, count, name, channel_id, message_thread_id):
+    reply = await bot.send_message(chat_id=channel_id, text=f"Downloading pdf:\n<pre><code>{name}</code></pre>", message_thread_id=message_thread_id if message_thread_id else None)
     time.sleep(1)
     start_time = time.time()
-    await bot.send_document(ka, caption=cc1)
+    await bot.send_document(chat_id=channel_id, document=ka, caption=cc1, message_thread_id=message_thread_id if message_thread_id else None)
     count+=1
     await reply.delete (True)
     time.sleep(1)
@@ -292,11 +296,12 @@ async def download_and_decrypt_video(url, cmd, name, key):
             print(f"Failed to decrypt {video_path}.")  
             return None  
 
-async def send_vid(bot: Client, m: Message, cc, filename, thumb, name, prog, channel_id):
+async def send_vid(bot: Client, m: Message, cc, filename, thumb, name, prog, channel_id, message_thread_id):
     subprocess.run(f'ffmpeg -i "{filename}" -ss 00:00:10 -vframes 1 "{filename}.jpg"', shell=True)
     await prog.delete (True)
-    reply1 = await bot.send_message(channel_id, f"**📩 Uploading Video 📩:-**\n<blockquote>**{name}**</blockquote>")
+    reply1 = await bot.send_message(channel_id, f"**📩 Uploading Video 📩:-**\n<blockquote>**{name}**</blockquote>", message_thread_id=message_thread_id if message_thread_id else None)
     reply = await m.reply_text(f"**Generate Thumbnail:**\n<blockquote>**{name}**</blockquote>")
+    thumbnail = None # Initialize thumbnail
     try:
         if thumb == "/d":
             thumbnail = f"{filename}.jpg"
@@ -305,15 +310,44 @@ async def send_vid(bot: Client, m: Message, cc, filename, thumb, name, prog, cha
             
     except Exception as e:
         await m.reply_text(str(e))
+        thumbnail = None # Ensure thumbnail is None on error
       
     dur = int(duration(filename))
     start_time = time.time()
 
     try:
-        await bot.send_video(channel_id, filename, caption=cc, supports_streaming=True, height=720, width=1280, thumb=thumbnail, duration=dur, progress=progress_bar, progress_args=(reply, start_time))
+        # Pass message_thread_id only if it's not None
+        video_kwargs = {
+            "chat_id": channel_id,
+            "video": filename,
+            "caption": cc,
+            "supports_streaming": True,
+            "height": 720,
+            "width": 1280,
+            "duration": dur,
+            "progress": progress_bar,
+            "progress_args": (reply, start_time)
+        }
+        if thumbnail: # Only add thumbnail if it's not None
+            video_kwargs["thumb"] = thumbnail
+        if message_thread_id: # Only add message_thread_id if it's not None
+            video_kwargs["message_thread_id"] = message_thread_id
+
+        await bot.send_video(**video_kwargs)
     except Exception:
-        await bot.send_document(channel_id, filename, caption=cc, progress=progress_bar, progress_args=(reply, start_time))
+        # Fallback to send_document if send_video fails
+        document_kwargs = {
+            "chat_id": channel_id,
+            "document": filename,
+            "caption": cc,
+            "progress": progress_bar,
+            "progress_args": (reply, start_time)
+        }
+        if message_thread_id: # Only add message_thread_id if it's not None
+            document_kwargs["message_thread_id"] = message_thread_id
+        await bot.send_document(**document_kwargs)
     os.remove(filename)
     await reply.delete(True)
     await reply1.delete(True)
-    os.remove(f"{filename}.jpg")
+    if os.path.exists(f"{filename}.jpg"): # Only remove if it exists
+        os.remove(f"{filename}.jpg")
