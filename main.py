@@ -89,7 +89,7 @@ async def classplus_downloader_2(client: Client, m: Message):
         input_org_code: Message = await bot.listen(m.chat.id, timeout=120)
         org_code = input_org_code.text.strip()
         await input_org_code.delete()
-        await editable.edit(f"🔄 Fetching organization details for \`'{org_code}'\`...")
+        await editable.edit(f"🔄 Fetching organization details for `'{org_code}'`...")
 
         org_id = await classplus_helper.get_org_id(org_code)
         if not org_id:
@@ -182,6 +182,7 @@ async def handle_folder_action(client, callback_query):
 
     if action == "open":
         await display_folders(client, message, editable, current_folder, str(folder_id))
+
     elif action == "get_links":
         folder_name = sanitize_filename(current_folder['name'])
         await editable.edit(f"Getting links for folder: **{current_folder['name']}**")
@@ -193,20 +194,23 @@ async def handle_folder_action(client, callback_query):
 
         file_path = os.path.join("downloads", f"{folder_name} - ({user_data['course_name']}).txt")
         os.makedirs("downloads", exist_ok=True)
+        
+        import re  # ✅ Add this if not already present
+
         with open(file_path, 'w', encoding='utf-8') as f:
             for video in all_videos:
-                # Format the folder path with parentheses around each segment
                 if video.get('folder_path'):
-                    path_segments = video['folder_path'].split('\\')
+                    path_segments = re.split(r'[\\/]', video['folder_path'])  # ✅ Cross-platform fix
                     formatted_path = ' '.join(f"({segment})" for segment in path_segments)
                     display_title = f"{formatted_path} - {video['name']}"
                 else:
                     display_title = video['name']
                 f.write(f"{display_title}: {video['vid_url']}\n")
-        
+
         await client.send_document(message.chat.id, document=file_path, caption=f"Links from {current_folder['name']}")
         os.remove(file_path)
         await display_folders(client, message, editable, current_folder, str(folder_id))
+
 
 @bot.on_message(filters.command("addauth") & filters.private)
 async def add_auth_user(client: Client, message: Message):
