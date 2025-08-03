@@ -109,7 +109,7 @@ async def get_course_content_fast(orgid, courseid):
                                 'subfolders': [],
                                 'videos': [],
                                 'parent_id': folder_id,
-                                'path': os.path.join(current_folder_dict['path'], item.get("name", "Unnamed"))
+                                'path': '|'.join([current_folder_dict['path'], item.get("name", "Unnamed")]).strip('|')
                             }
                             current_folder_dict['subfolders'].append(new_folder)
                             all_folders_data[sub_folder_id] = new_folder
