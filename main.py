@@ -32,7 +32,9 @@ from pyrogram.types import Message, InputMediaPhoto
 from pyrogram.errors import FloodWait, PeerIdInvalid, UserIsBlocked, InputUserDeactivated
 from pyrogram.errors.exceptions.bad_request_400 import StickerEmojiInvalid
 from pyrogram.types.messages_and_media import message
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from pyrogram.errors import ButtonDataInvalid
+import cp as classplus_helper
 import aiohttp
 import aiofiles
 import zipfile
@@ -46,6 +48,7 @@ bot = Client(
     api_hash=API_HASH,
     bot_token=BOT_TOKEN
 )
+user_course_data = {}
 
 processing_request = False
 cancel_requested = False
@@ -76,6 +79,184 @@ image_urls = [
     "https://tinypic.host/images/2025/02/07/DeWatermark.ai_1738952933236-1.png",
     # Add more image URLs as needed
 ]
+def sanitize_filename(name):
+    return re.sub(r'[\\/*?";:<>|:]', '_', name)
+@bot.on_message(filters.command(["cp"]))
+async def classplus_downloader_2(client: Client, m: Message):
+    if m.chat.id not in AUTH_USERS:
+        await m.reply_text(f"<blockquote>__**Oopss! You are not a Premium member\nPLEASE /upgrade YOUR PLAN\nSend me your user id for authorization\nYour User id**__ - `{m.chat.id}`</blockquote>\n")
+        return
+
+    editable = await m.reply_text("<b>Hello! Please send me the Classplus Organization Code. (e.g., `testbook`)</b>")
+
+    try:
+        # 1. Get Org Code
+        input_org_code: Message = await bot.listen(m.chat.id, timeout=120)
+        org_code = input_org_code.text.strip()
+        await input_org_code.delete()
+        await editable.edit(f"🔄 Fetching organization details for `'" + org_code + "'`...")
+
+        # 2. Get Org ID and Courses
+        org_id = await classplus_helper.get_org_id(org_code)
+        if not org_id:
+            await editable.edit("❌ **Invalid Organization Code.** Please try again.")
+            return
+
+        await editable.edit(f"✅ Organization found! Fetching course list...")
+        courses = await classplus_helper.get_course_list(org_id)
+        if not courses:
+            await editable.edit("❌ **No courses found for this organization or the API token is invalid/expired.**")
+            return
+
+        # 3. Display courses and get user selection
+        course_list_text = "📚 **Select a course to download by replying with its number:**\n\n"
+        for i, course in enumerate(courses, 1):
+            course_list_text += f"**{i}.** {course.get('name', 'N/A')}\n"
+        
+        await editable.edit(course_list_text)
+        
+        input_course_num: Message = await bot.listen(m.chat.id, timeout=120)
+        try:
+            course_index = int(input_course_num.text.strip()) - 1
+            if not (0 <= course_index < len(courses)):
+                raise ValueError
+            selected_course = courses[course_index]
+        except (ValueError, IndexError):
+            await input_course_num.reply_text("❌ **Invalid selection.** Please start over.")
+            await editable.delete()
+            return
+        
+        await input_course_num.delete()
+        course_id = selected_course.get('id')
+        raw_course_name = selected_course.get('name', 'course')
+        course_name = sanitize_filename(raw_course_name)
+        
+        await editable.edit(f"✅ Course `'" + raw_course_name + "'` selected.\n\n**Crawling all course data, please wait...** ⚡")
+
+        # 4. Fetch folder structure
+        folder_structure = await classplus_helper.get_course_content_fast(org_id, course_id)
+
+        if not folder_structure:
+            await editable.edit("❌ **No content found in this course.**")
+            return
+
+        user_course_data[m.chat.id] = {
+            "org_id": org_id, 
+            "course_id": course_id, 
+            "course_name": course_name,
+            "folder_structure": folder_structure
+        }
+
+        # 5. Start interactive folder navigation
+        await display_folders(client, m, editable, folder_structure)
+
+    except asyncio.TimeoutError:
+        await editable.edit("⌛ **Request timed out.** Please start over.")
+    except Exception as e:
+        await editable.edit(f"An error occurred: `{str(e)}`")
+        logging.error(f"Classplus downloader error: {e}", exc_info=True)
+
+async def display_folders(client, message, editable, current_folder, path_id="0"):
+    buttons = []
+    for folder in current_folder['subfolders']:
+        buttons.append([InlineKeyboardButton(folder['name'], callback_data=f"open:{folder['id']}")])
+
+    buttons.append([InlineKeyboardButton("Get All Links in This Folder", callback_data=f"get_links:{path_id}")])
+    if path_id != "0":
+        parent_id = current_folder.get("parent_id", "0")
+        buttons.append([InlineKeyboardButton(".. Back", callback_data=f"open:{parent_id}")])
+
+    buttons.append([InlineKeyboardButton("Close", callback_data="close_folder_list")])
+
+    folder_display_name = current_folder['name']
+    if current_folder.get('parent_id') is not None and current_folder['parent_id'] != 0:
+        # Find parent folder name for display
+        user_data = user_course_data.get(message.chat.id)
+        if user_data:
+            def find_folder_by_id(structure, target_id):
+                if structure['id'] == target_id:
+                    return structure
+                for subfolder in structure['subfolders']:
+                    found = find_folder_by_id(subfolder, target_id)
+                    if found:
+                        return found
+                return None
+            
+            parent_folder = find_folder_by_id(user_data['folder_structure'], current_folder['parent_id'])
+            if parent_folder:
+                folder_display_name = f"{current_folder['name']} ({parent_folder['name']})"
+
+    try:
+        await editable.edit(f"**Folders in {folder_display_name}:**", reply_markup=InlineKeyboardMarkup(buttons))
+    except ButtonDataInvalid:
+        await editable.edit("Error: Too many folders to display. This is a Telegram limitation.")
+
+@bot.on_callback_query(filters.regex(r"^(open|get_links|close_folder_list):"))
+async def handle_folder_action(client, callback_query):
+    action, data = callback_query.data.split(":", 1)
+    message = callback_query.message
+    editable = await message.edit_text("Processing...")
+
+    user_data = user_course_data.get(message.chat.id)
+    if not user_data:
+        await editable.edit("Something went wrong, please start over.")
+        return
+
+    course_name = user_data["course_name"]
+    folder_structure = user_data["folder_structure"]
+
+    def find_folder(structure, target_id):
+        if structure['id'] == target_id:
+            return structure
+        for subfolder in structure['subfolders']:
+            found = find_folder(subfolder, target_id)
+            if found:
+                return found
+        return None
+
+    if action == "close_folder_list":
+        await editable.delete()
+        return
+
+    folder_id = int(data)
+    current_folder = find_folder(folder_structure, folder_id)
+
+    if not current_folder:
+        await editable.edit("Folder not found. Please try again.")
+        return
+
+    if action == "open":
+        await display_folders(client, message, editable, current_folder, str(folder_id))
+
+    elif action == "get_links":
+        folder_name = sanitize_filename(current_folder['name'])
+        await editable.edit(f"Getting links for folder: **{current_folder['name']}**")
+        
+        all_videos = await classplus_helper.get_videos_from_folder_id(folder_structure, folder_id)
+        
+        if not all_videos:
+            await editable.edit("No videos found in this folder.")
+            return
+
+        file_path = os.path.join("downloads", f"{folder_name} - ({course_name}).txt")
+        os.makedirs("downloads", exist_ok=True)
+        with open(file_path, 'w', encoding='utf-8') as f:
+            for video in all_videos:
+                # Include parent folder in the title if available
+                display_title = video['name']
+                if video.get('folder_path'):
+                    parts = video['folder_path'].split('/')
+                    if parts:
+                        last_parent_folder = parts[-1].strip()
+                        display_title = f"( {last_parent_folder} ) - {video['name']}"
+                f.write(f"{display_title}: {video['vid_url']}\n")
+
+
+        await client.send_document(message.chat.id, document=file_path, caption=f"Links from {current_folder['name']}")
+        os.remove(file_path)
+        # Do not delete editable here, allow user to continue navigating
+        await display_folders(client, message, editable, current_folder, str(folder_id)) # Re-display the folder
+
 
 @bot.on_message(filters.command("addauth") & filters.private)
 async def add_auth_user(client: Client, message: Message):
@@ -1152,9 +1333,9 @@ async def txt_handler(bot: Client, m: Message):
             try:
                 if raw_text5 == "yes":
                     raw_title = links[i][0]
-                    t_match = re.search(r"[\(\[]([^\)\]]+)[\)\]]", raw_title)
+                    t_match = re.findall(r"[\(\[]([^\)\]]+)[\)\]]", raw_title)
                     if t_match:
-                        t_name = t_match.group(1).strip()
+                        t_name = t_match[-1].strip()
                         v_name = re.sub(r"^[\(\[][^\)\]]+[\)\]]\s*", "", raw_title)
                         v_name = re.sub(r"[\(\[][^\)\]]+[\)\]]", "", v_name)
                         v_name = re.sub(r":.*", "", v_name).strip()
@@ -1162,7 +1343,7 @@ async def txt_handler(bot: Client, m: Message):
                         t_name = "Untitled"
                         v_name = re.sub(r":.*", "", raw_title).strip()
                     
-                    cc = f'[🎥]Vid Id : {str(count).zfill(3)}\n**Video Title :** `{v_name} [{res}p] .mkv`\n<blockquote><b>Batch Name : {b_name}\nTopic Name : {t_name}</b></blockquote>\n\n**Extracted by➤**{CR}\n'
+                    cc = f'[🎥]Vid Id : {str(count).zfill(3)}\n\nVideo Title : {v_name} [{res}p] .mkv\n\nBatch Name : {b_name}\n\nTopic Name : {t_name}\n\nExtracted by➤ {CR}'
                     cc1 = f'[📕]Pdf Id : {str(count).zfill(3)}\n**File Title :** `{v_name} .pdf`\n<blockquote><b>Batch Name : {b_name}\nTopic Name : {t_name}</b></blockquote>\n\n**Extracted by➤**{CR}\n'
                     cczip = f'[📁]Zip Id : {str(count).zfill(3)}\n**Zip Title :** `{v_name} .zip`\n<blockquote><b>Batch Name : {b_name}\nTopic Name : {t_name}</b></blockquote>\n\n**Extracted by➤**{CR}\n'
                     ccimg = f'[🖼️]Img Id : {str(count).zfill(3)}\n**Img Title :** `{v_name} .jpg`\n<blockquote><b>Batch Name : {b_name}\nTopic Name : {t_name}</b></blockquote>\n\n**Extracted by➤**{CR}\n'
@@ -1170,7 +1351,7 @@ async def txt_handler(bot: Client, m: Message):
                     ccyt = f'[🎥]Vid Id : {str(count).zfill(3)}\n**Video Title :** `{v_name} .mp4`\n<a href="{url}">__**Click Here to Watch Stream**__</a>\n<blockquote><b>Batch Name : {b_name}\nTopic Name : {t_name}</b></blockquote>\n\n**Extracted by➤**{CR}\n'
                     ccm = f'[🎵]Mp3 Id : {str(count).zfill(3)}\n**Audio Title :** `{v_name} .mp3`\n<blockquote><b>Batch Name : {b_name}\nTopic Name : {t_name}</b></blockquote>\n\n**Extracted by➤**{CR}\n'
                 else:
-                    cc = f'[🎥]Vid Id : {str(count).zfill(3)}\n**Video Title :** `{name1} [{res}p] .mkv`\n<blockquote><b>Batch Name :</b> {b_name}</blockquote>\n\n**Extracted by➤**{CR}\n'
+                    cc = f'[🎥]Vid Id : {str(count).zfill(3)}\n\nVideo Title : {name1} [{res}p] .mkv\n\nBatch Name : {b_name}\n\nExtracted by➤ {CR}'
                     cc1 = f'[📕]Pdf Id : {str(count).zfill(3)}\n**File Title :** `{name1} .pdf`\n<blockquote><b>Batch Name :</b> {b_name}</blockquote>\n\n**Extracted by➤**{CR}\n'
                     cczip = f'[📁]Zip Id : {str(count).zfill(3)}\n**Zip Title :** `{name1} .zip`\n<blockquote><b>Batch Name :</b> {b_name}</blockquote>\n\n**Extracted by➤**{CR}\n' 
                     ccimg = f'[🖼️]Img Id : {str(count).zfill(3)}\n**Img Title :** `{name1} .jpg`\n<blockquote><b>Batch Name :</b> {b_name}</blockquote>\n\n**Extracted by➤**{CR}\n'
