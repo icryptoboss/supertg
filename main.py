@@ -1514,10 +1514,11 @@ async def txt_handler(bot: Client, m: Message):
                     await prog.delete(True)
                     await helper.send_vid(bot, m, cc, filename, thumb, name, prog, target_chat_id, target_topic_id)
                     time.sleep(1)
+                    count += 1
 
             except Exception as e:
-                await bot.send_message(chat_id=target_chat_id, text=f'⚠️**Downloading Failed**⚠️\n**Name** =>> `{str(count).zfill(3)} {name1}`\n**Url** =>> {url}\n\n<blockquote expandable><i><b>Failed Reason: {str(e)}</b></i></blockquote>', disable_web_page_preview=True, message_thread_id=target_topic_id if target_topic_id else None)
                 count += 1
+                await bot.send_message(chat_id=target_chat_id, text=f'⚠️**Downloading Failed**⚠️\n**Name** =>> `{str(count).zfill(3)} {name1}`\n**Url** =>> {url}\n\n<blockquote expandable><i><b>Failed Reason: {str(e)}</b></i></blockquote>', disable_web_page_preview=True, message_thread_id=target_topic_id if target_topic_id else None) 
                 failed_count += 1
                 continue
 
